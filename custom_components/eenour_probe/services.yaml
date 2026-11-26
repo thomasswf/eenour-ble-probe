@@ -1,0 +1,20 @@
+write:
+  name: Write characteristic
+  description: Write hex bytes to a GATT characteristic on the probed device.
+  fields:
+    uuid:
+      name: Characteristic UUID
+      required: true
+      selector:
+        text:
+    data:
+      name: Data (hex)
+      required: true
+      selector:
+        text:
+    response:
+      name: Write with response
+      required: false
+      default: true
+      selector:
+        boolean:
