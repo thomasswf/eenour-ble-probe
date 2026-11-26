@@ -54,6 +54,24 @@ async def probe_loop(hass: HomeAssistant, probe: Probe):
             probe.connected = True
             _LOGGER.info("EENOUR_PROBE connected to %s", probe.address)
 
+            # The 9C40 data characteristic rejects writes with ATT
+            # INSUFFICIENT_AUTHORIZATION until the link is encrypted, so
+            # pair (Just Works, no MITM) right after connecting. Android
+            # does this implicitly in the vendor app; BlueZ needs it
+            # explicitly. Bonding persists in BlueZ, so later connections
+            # are encrypted automatically.
+            try:
+                await client.pair(protection_level=1)
+                _LOGGER.info("EENOUR_PROBE paired (encryption on)")
+            except TypeError:
+                try:
+                    await client.pair()
+                    _LOGGER.info("EENOUR_PROBE paired via default call")
+                except Exception as err:
+                    _LOGGER.info("EENOUR_PROBE pair failed: %r", err)
+            except Exception as err:
+                _LOGGER.info("EENOUR_PROBE pair note: %r", err)
+
             dump = []
             for service in client.services:
                 s_entry = {"service": service.uuid, "chars": []}
