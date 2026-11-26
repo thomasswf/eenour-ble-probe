@@ -54,23 +54,21 @@ async def probe_loop(hass: HomeAssistant, probe: Probe):
             probe.connected = True
             _LOGGER.info("EENOUR_PROBE connected to %s", probe.address)
 
-            # The 9C40 data characteristic rejects writes with ATT
-            # INSUFFICIENT_AUTHORIZATION until the link is encrypted, so
-            # pair (Just Works, no MITM) right after connecting. Android
-            # does this implicitly in the vendor app; BlueZ needs it
-            # explicitly. Bonding persists in BlueZ, so later connections
-            # are encrypted automatically.
+            # FIRST-OP WRITE TEST (2026-11-26): nRF Connect on Android wrote
+            # this exact heartbeat frame to 9C40 successfully on an
+            # unbonded, unencrypted link, while BlueZ writes after
+            # reads/subscriptions were rejected with ATT 0x08. Test whether
+            # a write as the VERY FIRST GATT operation after connect (no
+            # pairing, no reads, no CCCD subscription yet) is accepted.
             try:
-                await client.pair(protection_level=1)
-                _LOGGER.info("EENOUR_PROBE paired (encryption on)")
-            except TypeError:
-                try:
-                    await client.pair()
-                    _LOGGER.info("EENOUR_PROBE paired via default call")
-                except Exception as err:
-                    _LOGGER.info("EENOUR_PROBE pair failed: %r", err)
+                await client.write_gatt_char(
+                    "00009c40-0000-1000-8000-00805f9b34fb",
+                    bytes.fromhex("aaaa000dcf03e87039000a001e00120001"),
+                    response=True,
+                )
+                _LOGGER.info("EENOUR_PROBE first-op write OK (heartbeat, with response)")
             except Exception as err:
-                _LOGGER.info("EENOUR_PROBE pair note: %r", err)
+                _LOGGER.info("EENOUR_PROBE first-op write FAILED: %r", err)
 
             dump = []
             for service in client.services:
@@ -125,6 +123,20 @@ async def probe_loop(hass: HomeAssistant, probe: Probe):
                             _LOGGER.info("EENOUR_PROBE subscribed %s", char.uuid)
                         except Exception as err:
                             _LOGGER.info("EENOUR_PROBE subscribe %s failed: %s", char.uuid, err)
+
+            # POST-SUBSCRIBE WRITE TEST: same frame again, now that reads
+            # and CCCD subscriptions have happened (the order that was
+            # rejected with ATT 0x08 in earlier sessions). Comparing the
+            # two outcomes isolates whether operation order matters.
+            try:
+                await client.write_gatt_char(
+                    "00009c40-0000-1000-8000-00805f9b34fb",
+                    bytes.fromhex("aaaa000dcf03e87039000a001e00120001"),
+                    response=True,
+                )
+                _LOGGER.info("EENOUR_PROBE post-subscribe write OK (heartbeat, with response)")
+            except Exception as err:
+                _LOGGER.info("EENOUR_PROBE post-subscribe write FAILED: %r", err)
 
             while client.is_connected:
                 await asyncio.sleep(5)
