@@ -54,21 +54,34 @@ async def probe_loop(hass: HomeAssistant, probe: Probe):
             probe.connected = True
             _LOGGER.info("EENOUR_PROBE connected to %s", probe.address)
 
+            # Settle: with a warm BlueZ/HA service cache, GATT operations
+            # issued in the first moments after connect can fail with
+            # "Not connected" even though the link is up (observed
+            # 2026-11-26 21:28-21:40: every op failed within ~10 ms of
+            # connect while bluetoothctl reported Connected: yes).
+            await asyncio.sleep(2)
+
             # FIRST-OP WRITE TEST (2026-11-26): nRF Connect on Android wrote
             # this exact heartbeat frame to 9C40 successfully on an
             # unbonded, unencrypted link, while BlueZ writes after
             # reads/subscriptions were rejected with ATT 0x08. Test whether
             # a write as the VERY FIRST GATT operation after connect (no
             # pairing, no reads, no CCCD subscription yet) is accepted.
-            try:
-                await client.write_gatt_char(
-                    "00009c40-0000-1000-8000-00805f9b34fb",
-                    bytes.fromhex("aaaa000dcf03e87039000a001e00120001"),
-                    response=True,
-                )
-                _LOGGER.info("EENOUR_PROBE first-op write OK (heartbeat, with response)")
-            except Exception as err:
-                _LOGGER.info("EENOUR_PROBE first-op write FAILED: %r", err)
+            for attempt in (1, 2):
+                try:
+                    await client.write_gatt_char(
+                        "00009c40-0000-1000-8000-00805f9b34fb",
+                        bytes.fromhex("aaaa000dcf03e87039000a001e00120001"),
+                        response=True,
+                    )
+                    _LOGGER.info("EENOUR_PROBE first-op write OK (heartbeat, attempt %s)", attempt)
+                    break
+                except Exception as err:
+                    _LOGGER.info("EENOUR_PROBE first-op write FAILED (attempt %s): %r", attempt, err)
+                    if "Not connected" in repr(err) and attempt == 1:
+                        await asyncio.sleep(3)
+                        continue
+                    break
 
             dump = []
             for service in client.services:
@@ -140,6 +153,20 @@ async def probe_loop(hass: HomeAssistant, probe: Probe):
 
             while client.is_connected:
                 await asyncio.sleep(5)
+                # Health check: a wedged/zombie link leaves is_connected
+                # True while every GATT op fails. A tiny read detects it;
+                # on failure, drop the client so the outer loop reconnects.
+                try:
+                    await client.read_gatt_char("00002a00-0000-1000-8000-00805f9b34fb")
+                except Exception as err:
+                    _LOGGER.info("EENOUR_PROBE health check failed, forcing reconnect: %r", err)
+                    try:
+                        await client.disconnect()
+                    except Exception:
+                        pass
+                    probe.connected = False
+                    probe.client = None
+                    break
         except asyncio.CancelledError:
             raise
         except Exception as err:
